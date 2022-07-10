@@ -1,10 +1,16 @@
 import io, {Socket} from 'socket.io-client';
-import type {IceServer} from "@/services/WebRtc.service";
+import type {WebRTCService} from "@/services/WebRtc.service";
+export type SendMessageType = 'SEND_OFFER' | 'SEND_ANSWER'  | 'SEND_CANDIDATE';
+export type ReceiveMessageType = 'OFFER' | 'ANSWER' | 'OPEN' | 'CANDIDATE';
 
-export type MessageType = 'offer' | 'answer' | 'connect_client' | 'new-ice-candidate';
-
-interface SignalingMessage {
-    type: MessageType;
+export interface SignalingSendMessage {
+    src?:string,
+    dst?:string,
+    data: any;
+}
+export interface SignalingReceiveMessage {
+    src?:string,
+    dst?:string,
     data: any;
 }
 
@@ -12,24 +18,30 @@ export class SignalingService {
     private socket?: Socket;
     onConnect?: () => void;
     onDisconnect?: () => void;
-    onMessage?: (type: MessageType, data: any) => void;
-    public iceServers?:IceServer[]
+    onMessage?: (type:ReceiveMessageType,message:SignalingReceiveMessage) => void;
+    // public iceServers?:IceServer[]
+    constructor(private service:WebRTCService,private signalingServerUrl: string) {
+    }
     /**
      * シグナリングサーバーと接続
      */
-    async init(signalingServerUrl: string) {
-        this.socket = io(`${signalingServerUrl}/signaling`, {});
+    async connect() {
+        this.socket = io(`${this.signalingServerUrl}/signaling`, {
+            query:{
+                peerId:this.service.peerId
+            }
+        });
         this.socket.on('connect', () => {
             if (this.onConnect) this.onConnect()
         });
         this.socket.on('disconnect', () => {
             if (this.onDisconnect) this.onDisconnect()
         });
-        this.socket.on('message', (event: SignalingMessage) => {
-            if (this.onMessage) this.onMessage(event.type, event.data)
+        ['OFFER' , 'ANSWER' , 'OPEN' , 'CANDIDATE'].forEach(type=>{
+            this.socket!.on(type, async(event: SignalingReceiveMessage) => {
+                if (this.onMessage) await this.onMessage(type as ReceiveMessageType,event)
+            })
         })
-        const credential = await fetch(`${signalingServerUrl}/?user=user`)
-        this.iceServers = await credential.json()
     }
 
     /**
@@ -39,9 +51,9 @@ export class SignalingService {
         this.socket?.disconnect();
     }
 
-    sendMessage(type: MessageType, data: any) {
-        const message: SignalingMessage = {type, data};
-        this.socket?.emit('message', message);
+    sendMessage(target:string,type: SendMessageType, data: any) {
+        const message: SignalingSendMessage = {dst:target,src:this.service.peerId,data:data};
+        this.socket?.emit(type, message);
     }
 
 }

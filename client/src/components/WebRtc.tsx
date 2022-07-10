@@ -24,21 +24,26 @@ export default defineComponent({
         const isAvailableRemoteMedia = ref(false)
 
         const initialize = async (isHost: boolean) => {
-            if(isInitialized.value)return
+            if (isInitialized.value) return
             isInitialized.value = true
-            webRtcService = new WebRTCService(new SignalingService(), props.signalingServerUrl);
-            if (isHost) {
-                await webRtcService.connectionAsHost({audio: true, video: true});
-                localVideoRef.value!.srcObject = webRtcService.localMediaStream!
-                isAvailableLocalMedia.value = true
-                const main = useMainStore()
-                main.setHostInitialized()
-            } else {
-                await webRtcService.connectionAsClient({audio: true, video: true});
-                remoteVideoRef.value!.srcObject = webRtcService.remoteMediaStream!;
-                isAvailableRemoteMedia.value = true
+            webRtcService = new WebRTCService(isHost ? "host" : "client", props.signalingServerUrl);
+            webRtcService.onOpen = async () => {
+                if (isHost) {
+                    localVideoRef.value!.srcObject = webRtcService.localMediaStream!
+                    isAvailableLocalMedia.value = true
+                    const main = useMainStore()
+                    main.setHostInitialized()
+                } else {
+                    remoteVideoRef.value!.srcObject = webRtcService.remoteMediaStream!;
+                    isAvailableRemoteMedia.value = true
+                    await webRtcService.call("host");
+                }
+                isLoading.value = false;
+            };
+            webRtcService.onOffer = async (message) => {
+                await webRtcService.answer(message.src!, message.data);
             }
-            isLoading.value = false;
+            await webRtcService.open({audio: true, video: true})
         }
         onMounted(async () => {
             await initialize(props.isHost)

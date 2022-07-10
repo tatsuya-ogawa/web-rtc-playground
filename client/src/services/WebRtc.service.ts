@@ -1,58 +1,57 @@
-import type {MessageType, SignalingService} from "@/services/Signaling.service";
+import type {
+    ReceiveMessageType,
+    SignalingReceiveMessage,
+} from "@/services/Signaling.service";
+import {SignalingService} from "@/services/Signaling.service";
 
-export interface IceServer {
+interface IceServer {
     urls: string
-    username: string
-    credential: string
+    username?: string
+    credential?: string
+}
+
+interface OpenMessage {
+    peerId?: string;
+    host?: string;
+    turnCredential: {
+        credential: string,
+        username: string
+    };
 }
 
 export class WebRTCService {
     localMediaStream?: MediaStream;
     remoteMediaStream: MediaStream = new MediaStream();
-    private isHost?: boolean;
-
-    constructor(private signaling: SignalingService, private signalingServerUrl: string) {
+    // private isHost?: boolean;
+    iceServers?: IceServer[];
+    pcDict: { [key: string]: RTCPeerConnection } = {};
+    onOpen?: () => Promise<void>;
+    onOffer?: (message: SignalingReceiveMessage) => Promise<void>;
+    signaling:SignalingService;
+    constructor(public peerId: string, private signalingUrl:string) {
+        this.signaling = new SignalingService(this,signalingUrl);
     }
 
-    /**
-     * ホストとして接続
-     */
-    async connectionAsHost(constraints: MediaStreamConstraints) {
-        this.isHost = true;
-        try {
-            // 1. ホスト側のメディアストリームを取得
-            this.localMediaStream = await navigator.mediaDevices.getUserMedia(constraints);
-
-            await this.signaling.init(this.signalingServerUrl);
-            // 2. ホスト側でPeerConnectionを作成し、トラックを追加
-            const pc = this.createPeerConnection(this.signaling.iceServers!);
-            this.localMediaStream.getTracks().forEach(track => pc.addTrack(track, this.localMediaStream!));
-
-            // ソケット接続時にオファーを送信
-            this.signaling.onConnect = () => this.sendOffer(pc);
-            this.signaling.onMessage = this.handleMessage(pc);
-        } catch (err) {
-            console.error(err);
+    async open(constraints: MediaStreamConstraints) {
+        this.localMediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+        await this.signaling.connect();
+        // クライアント接続時にホストからofferを送ってもらうためにシグナル送信
+        this.signaling.onConnect = () => {
         }
+        this.signaling.onMessage = this.handleMessage();
     }
 
     /**
      * クライアントとして接続
      */
-    async connectionAsClient(constraints: MediaStreamConstraints) {
-        this.isHost = false;
-        try {
-            this.localMediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+    async call(target: string) {
+        this.createPeerConnection(target);
+        await this.sendOffer(target);
+    }
 
-            await this.signaling.init(this.signalingServerUrl);
-            const pc = this.createPeerConnection(this.signaling.iceServers!);
-
-            // クライアント接続時にホストからofferを送ってもらうためにシグナル送信
-            this.signaling.onConnect = () => this.signaling.sendMessage('connect_client', null);
-            this.signaling.onMessage = this.handleMessage(pc);
-        } catch (err) {
-            console.error(err);
-        }
+    async answer(target: string, data: any) {
+        this.createPeerConnection(target);
+        await this.sendAnswer(target, data);
     }
 
     /**
@@ -65,76 +64,101 @@ export class WebRTCService {
         this.signaling.disconnect();
     }
 
-    private createPeerConnection(iceServers: IceServer[]) {
+    private createPeerConnection(target: string) {
         const pcConfig: RTCConfiguration = {
-            iceServers: iceServers
+            iceServers: this.iceServers!
         };
 
-        const pc = new RTCPeerConnection(pcConfig);
+        this.pcDict[target] = new RTCPeerConnection(pcConfig);
         // リモートのトラック受信
-        pc.addEventListener('track', (event: RTCTrackEvent) => {
+        this.pcDict[target].addEventListener('track', (event: RTCTrackEvent) => {
             if (this.remoteMediaStream.getTracks().filter(track => track.id == event.track.id).length > 0) return
             this.remoteMediaStream.addTrack(event.track)
         });
         // 5． ICE候補を追加
-        pc.addEventListener('icecandidate', event => {
+        this.pcDict[target].addEventListener('icecandidate', event => {
             if (event.candidate) {
-                this.signaling.sendMessage('new-ice-candidate', event.candidate);
+                this.signaling.sendMessage(target,'SEND_CANDIDATE', event.candidate);
             }
         });
 
-        return pc;
+        return this.pcDict[target];
     }
 
-    private async sendOffer(peerConnection: RTCPeerConnection) {
+    private async sendOffer(target: string) {
         // 3. オファーを作成
-        const offer = await peerConnection.createOffer();
+        const offer = await this.pcDict[target].createOffer();
         // 4. 作成したオファーをローカル接続の記述として設定
-        await peerConnection.setLocalDescription(offer);
+        await this.pcDict[target].setLocalDescription(offer);
         // 6. オファーを送信
-        this.signaling.sendMessage('offer', offer);
+        this.signaling.sendMessage(target,'SEND_OFFER', offer);
     }
 
-    private handleMessage(peerConnection: RTCPeerConnection) {
-        return async (type: MessageType, data: any) => {
+    public async sendAnswer(target: string, data: RTCSessionDescriptionInit) {
+        // 7. クライアント側で受信したofferをリモート側の接続情報としてセット
+        const remoteDesc = new RTCSessionDescription(data);
+        await this.pcDict[target].setRemoteDescription(remoteDesc);
+        // 8. ローカルのメディアトラックをピア接続にアタッチ
+        this.localMediaStream?.getTracks().forEach(track => {
+            this.pcDict[target].addTrack(track, this.localMediaStream!)
+        });
+        // 9. アンサー作成
+        const answer = await this.pcDict[target].createAnswer();
+        // 10. アンサーをローカルの接続情報としてセット
+        await this.pcDict[target].setLocalDescription(answer);
+        // 11. アンサーを送信
+        this.signaling.sendMessage(target,'SEND_ANSWER', answer);
+    }
+
+    private async handleOpen(message: any) {
+        const openMessage: OpenMessage = message;
+        if(!this.peerId)this.peerId = openMessage.peerId!;
+        const turnHostName = openMessage.host;
+        this.iceServers = [
+            {urls: `stun:${turnHostName}:3478`},
+            {
+                urls: `turn:${turnHostName}:3478?transport=udp`,
+                ...openMessage.turnCredential
+            },
+            {
+                urls: `turn:${turnHostName}:3478?transport=tcp`,
+                ...openMessage.turnCredential
+            },
+        ];
+        this.onOpen && await this.onOpen();
+    }
+
+    private async handleOffer(message: SignalingReceiveMessage) {
+        this.onOffer && await this.onOffer(message);
+    }
+
+    private async handleAnswer(message: SignalingReceiveMessage) {
+        const remoteDesc = new RTCSessionDescription(message.data);
+        if (message.src) {
+            await this.pcDict[message.src!].setRemoteDescription(remoteDesc);
+        }
+    }
+
+    private handleMessage() {
+        return async (type:ReceiveMessageType,message: SignalingReceiveMessage) => {
             switch (type) {
-                case 'offer':
-                    if (!this.isHost) {
-                        // 7. クライアント側で受信したofferをリモート側の接続情報としてセット
-                        const remoteDesc = new RTCSessionDescription(data);
-                        await peerConnection.setRemoteDescription(remoteDesc);
-                        // 8. ローカルのメディアトラックをピア接続にアタッチ
-                        this.localMediaStream?.getTracks().forEach(track => {
-                            try{
-                                peerConnection.addTrack(track, this.localMediaStream!)
-                            }catch (ex){
-                                console.log(ex)
-                            }
-                        });
-                        // 9. アンサー作成
-                        const answer = await peerConnection.createAnswer();
-                        // 10. アンサーをローカルの接続情報としてセット
-                        await peerConnection.setLocalDescription(answer);
-                        // 11. アンサーを送信
-                        this.signaling.sendMessage('answer', answer);
-                    }
+                case 'OFFER':
+                    await this.handleOffer(message);
                     break;
-                case 'answer':
-                    // 12. ホスト側でアンサーを受信
-                    if (this.isHost) {
-                        // 13. アンサーをリモート側の接続情報としてセット
-                        const remoteDesc = new RTCSessionDescription(data);
-                        await peerConnection.setRemoteDescription(remoteDesc);
-                    }
+                case 'ANSWER':
+                    await this.handleAnswer(message);
                     break;
-                case 'connect_client':
-                    if (this.isHost) {
-                        // クライアントが接続してきたらオファーを投げてやる
-                        await this.sendOffer(peerConnection);
-                    }
+                case 'OPEN':
+                    // if (this.isHost) {
+                    //     // クライアントが接続してきたらオファーを投げてやる
+                    //     await this.sendOffer(peerConnection);
+                    // }
+                    await this.handleOpen(message);
                     break;
-                case 'new-ice-candidate':
-                    await peerConnection.addIceCandidate(data);
+                case 'CANDIDATE':
+                    if (message.dst) {
+                        await this.pcDict[message.dst].addIceCandidate(message.data);
+                    }
                     break;
             }
         }
