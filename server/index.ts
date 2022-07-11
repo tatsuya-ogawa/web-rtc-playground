@@ -4,18 +4,16 @@ import {Service} from "./service";
 
 const service = new Service();
 const server: http.Server = http.createServer()
-const store:{[key:string]:any} = {
-
-}
+const store: { [key: string]: any } = {}
 server.on("request", (req: http.IncomingMessage, res: http.ServerResponse) => {
     res.setHeader('Access-Control-Allow-Origin', '*')
     res.setHeader('Access-Control-Request-Method', '*')
     res.setHeader('Access-Control-Allow-Methods', '*')
     res.setHeader('Access-Control-Allow-Headers', '*')
     res.writeHead(200, {'Content-Type': 'application/json'});
-    switch(req.url){
+    switch (req.url) {
         case "/signaling":
-            res.write(JSON.stringify({domain:"localhost:4000",secure:false}));
+            res.write(JSON.stringify({domain: "localhost:4000", protocol: "http"}));
             break;
         case "/list":
             res.write(JSON.stringify(Object.keys(store)))
@@ -29,17 +27,19 @@ const io: socketio.Server = new socketio.Server(server, {
         methods: '*',
         allowedHeaders: '*',
         credentials: true,
-    }
+    },
+    allowEIO3: true
 });
 io.of("/").on('connection', (socket: socketio.Socket) => {
-    ["OFFER","ANSWER","CANDIDATE"].forEach((message)=>{
+    ["OFFER", "ANSWER", "CANDIDATE"].forEach((message) => {
         socket.on(`SEND_${message}`, (data: any) => {
             // socket.broadcast.emit(message, data);
             socket.to(store[data.dst]).emit(message, data);
         });
     })
     store[socket.handshake.query.peerId as string] = socket.id
-    socket.emit('OPEN',service.getOpenMessage(socket.handshake.query.peerId as string))
+    socket.emit('OPEN', service.getOpenMessage(socket.handshake.query.peerId as string)
+    )
 });
 
 

@@ -5,15 +5,23 @@ export type SendMessageType = 'SEND_OFFER' | 'SEND_ANSWER' | 'SEND_CANDIDATE';
 export type ReceiveMessageType = 'OFFER' | 'ANSWER' | 'OPEN' | 'CANDIDATE';
 
 export interface SignalingSendMessage {
+    connectionId:string,
     src?: string,
     dst?: string,
-    data: any;
+    // data: any;
+    offer?: any,
+    answer?: any,
+    candidate?: any
 }
 
 export interface SignalingReceiveMessage {
+    connectionId:string,
     src?: string,
     dst?: string,
-    data: any;
+    // data: any;
+    offer?: any,
+    answer?: any,
+    candidate?: any
 }
 
 export class SignalingService {
@@ -30,8 +38,8 @@ export class SignalingService {
      * シグナリングサーバーと接続
      */
     async connect() {
-        const {domain,secure} = await (await fetch(`${this.signalingServerUrl}/signaling`)).json()
-        this.socket = io(`${secure?"https":"http"}://${domain}`, {
+        const {domain,protocol} = await (await fetch(`${this.signalingServerUrl}/signaling`)).json()
+        this.socket = io(`${protocol??"https"}://${domain}`, {
             query: {
                 peerId: this.service.peerId
             },
@@ -57,8 +65,8 @@ export class SignalingService {
         this.socket?.disconnect();
     }
 
-    sendMessage(target: string, type: SendMessageType, data: any) {
-        const message: SignalingSendMessage = {dst: target, src: this.service.peerId, data: data};
+    sendMessage(type:SendMessageType,message:SignalingSendMessage) {
+        // const message: SignalingSendMessage = {connectionId,dst: target, src: this.service.peerId, ...data};
         this.socket?.emit(type, message);
     }
 

@@ -2,7 +2,8 @@ import {createHmac} from 'node:crypto';
 
 export interface OpenMessage {
     peerId?: string;
-    host?: string;
+    turnUrl?: string;
+    stunUrl?: string;
     turnCredential: {
         credential: string,
         username: string
@@ -34,7 +35,7 @@ export class Service {
     }
 
     getOpenMessage(peerId: string): OpenMessage {
-        if(!peerId)peerId = Math.random().toString(32).substring(2);
+        if (!peerId) peerId = Math.random().toString(32).substring(2);
         const secret = process.env['TURN_SECRET'];
         const turnHostName = process.env['TURN_HOSTNAME'];
         if (!secret) {
@@ -48,9 +49,10 @@ export class Service {
             secret,
         );
         return {
-            peerId:peerId,
-            host:turnHostName,
-            turnCredential:{
+            peerId: peerId,
+            turnUrl: `turn:${turnHostName}:3748`,
+            stunUrl: `stun:${turnHostName}:3748`,
+            turnCredential: {
                 username: username,
                 credential: credential,
             }

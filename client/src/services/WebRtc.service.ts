@@ -12,7 +12,8 @@ interface IceServer {
 
 interface OpenMessage {
     peerId?: string;
-    host?: string;
+    turnUrl?: string;
+    stunUrl?: string;
     turnCredential: {
         credential: string,
         username: string
@@ -26,9 +27,10 @@ export class WebRTCService {
     pcDict: { [key: string]: RTCPeerConnection } = {};
     onOpen?: () => Promise<void>;
     onOffer?: (message: SignalingReceiveMessage) => Promise<void>;
-    signaling:SignalingService;
-    constructor(public peerId: string, private signalingUrl:string) {
-        this.signaling = new SignalingService(this,signalingUrl);
+    signaling: SignalingService;
+
+    constructor(public peerId: string, private signalingUrl: string) {
+        this.signaling = new SignalingService(this, signalingUrl);
     }
 
     async open(constraints: MediaStreamConstraints) {
@@ -43,13 +45,13 @@ export class WebRTCService {
      * クライアントとして接続
      */
     async call(target: string) {
-        this.createPeerConnection(target);
-        await this.sendOffer(target);
+        const connectionId = this.createPeerConnection(target);
+        await this.sendOffer(connectionId, target);
     }
 
-    async answer(target: string, data: any) {
-        this.createPeerConnection(target);
-        await this.sendAnswer(target, data);
+    async answer(connectionId: string, target: string, data: any) {
+        this.createPeerConnection(target, connectionId);
+        await this.sendAnswer(connectionId, target, data);
     }
 
     /**
@@ -60,54 +62,59 @@ export class WebRTCService {
         this.signaling.disconnect();
     }
 
-    private createPeerConnection(target: string) {
+    private createRandom(): string {
+        return Math.random().toString(32).substring(2);
+    }
+
+    private createPeerConnection(target: string, connectionId?: string): string {
+        connectionId = connectionId || this.createRandom();
         const pcConfig: RTCConfiguration = {
             iceServers: this.iceServers!
         };
-
-        this.pcDict[target] = new RTCPeerConnection(pcConfig);
-        this.pcDict[target].addEventListener('track', (event: RTCTrackEvent) => {
+        this.pcDict[connectionId] = new RTCPeerConnection(pcConfig);
+        this.pcDict[connectionId].addEventListener('track', (event: RTCTrackEvent) => {
             if (this.remoteMediaStream.getTracks().filter(track => track.id == event.track.id).length > 0) return
             this.remoteMediaStream.addTrack(event.track)
         });
-        this.pcDict[target].addEventListener('icecandidate', event => {
+        this.pcDict[connectionId].addEventListener('icecandidate', event => {
             if (event.candidate) {
-                this.signaling.sendMessage(target,'SEND_CANDIDATE', event.candidate);
+                this.signaling.sendMessage('SEND_CANDIDATE', {connectionId:connectionId!, src: this.peerId, dst: target, candidate:event.candidate});
             }
         });
-        return this.pcDict[target];
+        return connectionId;
     }
 
-    private async sendOffer(target: string) {
-        this.localMediaStream!.getTracks().forEach(track => this.pcDict[target].addTrack(track, this.localMediaStream!));
-        const offer = await this.pcDict[target].createOffer();
-        await this.pcDict[target].setLocalDescription(offer);
-        this.signaling.sendMessage(target,'SEND_OFFER', offer);
+    private async sendOffer(connectionId: string, target: string) {
+        this.localMediaStream!.getTracks().forEach(track => this.pcDict[connectionId].addTrack(track, this.localMediaStream!));
+        const offer = await this.pcDict[connectionId].createOffer();
+        await this.pcDict[connectionId].setLocalDescription(offer);
+        this.signaling.sendMessage('SEND_OFFER', {connectionId, src: this.peerId, dst: target, offer});
     }
 
-    public async sendAnswer(target: string, data: RTCSessionDescriptionInit) {
+    public async sendAnswer(connectionId: string, target: string, data: RTCSessionDescriptionInit) {
         const remoteDesc = new RTCSessionDescription(data);
-        await this.pcDict[target].setRemoteDescription(remoteDesc);
+        await this.pcDict[connectionId].setRemoteDescription(remoteDesc);
         this.localMediaStream?.getTracks().forEach(track => {
-            this.pcDict[target].addTrack(track, this.localMediaStream!)
+            this.pcDict[connectionId].addTrack(track, this.localMediaStream!)
         });
-        const answer = await this.pcDict[target].createAnswer();
-        await this.pcDict[target].setLocalDescription(answer);
-        this.signaling.sendMessage(target,'SEND_ANSWER', answer);
+        const answer = await this.pcDict[connectionId].createAnswer();
+        await this.pcDict[connectionId].setLocalDescription(answer);
+        this.signaling.sendMessage('SEND_ANSWER', {connectionId, src: this.peerId, dst: target, answer});
     }
 
     private async handleOpen(message: any) {
         const openMessage: OpenMessage = message;
-        if(!this.peerId)this.peerId = openMessage.peerId!;
-        const turnHostName = openMessage.host;
+        if (!this.peerId) this.peerId = openMessage.peerId!;
+        const turnUrl = openMessage.turnUrl;
+        const stunUrl = openMessage.stunUrl;
         this.iceServers = [
-            {urls: `stun:${turnHostName}:3478`},
+            {urls: `${stunUrl}`},
             {
-                urls: `turn:${turnHostName}:3478?transport=udp`,
+                urls: `${turnUrl}?transport=udp`,
                 ...openMessage.turnCredential
             },
             {
-                urls: `turn:${turnHostName}:3478?transport=tcp`,
+                urls: `${turnUrl}?transport=tcp`,
                 ...openMessage.turnCredential
             },
         ];
@@ -119,14 +126,14 @@ export class WebRTCService {
     }
 
     private async handleAnswer(message: SignalingReceiveMessage) {
-        const remoteDesc = new RTCSessionDescription(message.data);
-        if (message.src) {
-            await this.pcDict[message.src!].setRemoteDescription(remoteDesc);
+        const remoteDesc = new RTCSessionDescription(message.answer);
+        if (message.connectionId) {
+            await this.pcDict[message.connectionId].setRemoteDescription(remoteDesc);
         }
     }
 
     private handleMessage() {
-        return async (type:ReceiveMessageType,message: SignalingReceiveMessage) => {
+        return async (type: ReceiveMessageType, message: SignalingReceiveMessage) => {
             switch (type) {
                 case 'OFFER':
                     await this.handleOffer(message);
@@ -139,7 +146,7 @@ export class WebRTCService {
                     break;
                 case 'CANDIDATE':
                     if (message.src) {
-                        await this.pcDict[message.src].addIceCandidate(message.data);
+                        await this.pcDict[message.connectionId].addIceCandidate(message.candidate);
                     }
                     break;
             }
