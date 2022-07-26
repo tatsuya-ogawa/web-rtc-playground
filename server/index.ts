@@ -4,20 +4,28 @@ import {Service} from "./service";
 
 const service = new Service();
 const server: http.Server = http.createServer()
-const store: { [key: string]: any } = {}
+const store: { [key: string]: { socket: socketio.Socket } } = {}
 server.on("request", (req: http.IncomingMessage, res: http.ServerResponse) => {
     res.setHeader('Access-Control-Allow-Origin', '*')
     res.setHeader('Access-Control-Request-Method', '*')
     res.setHeader('Access-Control-Allow-Methods', '*')
     res.setHeader('Access-Control-Allow-Headers', '*')
-    res.writeHead(200, {'Content-Type': 'application/json'});
-    switch (req.url) {
-        case "/signaling":
-            res.write(JSON.stringify({domain: "localhost:4000", protocol: "http"}));
-            break;
-        case "/list":
-            res.write(JSON.stringify(Object.keys(store)))
-            break;
+    const parse = (req: http.IncomingMessage): string | undefined => {
+        if (req.url == "/signaling") {
+            return JSON.stringify({domain: "localhost:4000", protocol: "http"});
+        } else if (req.url?.match(/\/api\/apikeys\/(key)\/clients\//)) {
+            return JSON.stringify(Object.keys(store));
+        } else {
+            return undefined;
+        }
+    }
+    const body = parse(req)
+    if (body) {
+        res.writeHead(200, {'Content-Type': 'application/json'});
+        res.write(body)
+    } else {
+        res.writeHead(404, {'Content-Type': 'application/json'});
+        res.write("{}")
     }
     res.end();
 })
@@ -34,10 +42,12 @@ io.of("/").on('connection', (socket: socketio.Socket) => {
     ["OFFER", "ANSWER", "CANDIDATE"].forEach((message) => {
         socket.on(`SEND_${message}`, (data: any) => {
             // socket.broadcast.emit(message, data);
-            socket.to(store[data.dst]).emit(message, data);
+            console.log(data)
+            socket.to(store[data.dst].socket.id).emit(message, data);
         });
     })
-    store[socket.handshake.query.peerId as string] = socket.id
+    console.log(socket.handshake.query)
+    store[socket.handshake.query.peerId as string] = {socket}
     socket.emit('OPEN', service.getOpenMessage(socket.handshake.query.peerId as string)
     )
 });

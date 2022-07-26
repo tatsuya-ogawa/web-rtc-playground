@@ -36,7 +36,7 @@ export default defineComponent({
                 } else {
                     remoteVideoRef.value!.srcObject = webRtcService.remoteMediaStream!;
                     isAvailableRemoteMedia.value = true
-                    await webRtcService.call("unity");
+                    await webRtcService.call("host");
                 }
                 isLoading.value = false;
             };
