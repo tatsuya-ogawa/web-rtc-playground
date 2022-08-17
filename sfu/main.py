@@ -23,7 +23,7 @@ async def candidate(request):
     if connection_id in pcs:
         pcs[connection_id]["candidate"] = candidate_params
         if "pc" in pcs[connection_id]:
-            pcs[connection_id]["pc"].addIceCandidate(candidate_params)
+            await pcs[connection_id]["pc"].addIceCandidate(candidate_params)
     else:
         pcs[connection_id] = {
             "candidate": candidate_params
@@ -49,7 +49,7 @@ async def offer(request):
     if connection_id in pcs:
         candidate = pcs[connection_id]["candidate"]
         pcs[connection_id] = {"pc": pc, "tracks": [], "candidate": candidate, "relay": relay}
-        pc.addIceCandidate(candidate)
+        await pc.addIceCandidate(candidate)
     else:
         pcs[connection_id] = {"pc": pc, "tracks": [], "relay": relay}
 
