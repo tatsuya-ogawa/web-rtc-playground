@@ -22,7 +22,8 @@ async def candidate(request):
     connection_id = params["connectionId"]
     if connection_id in pcs:
         pcs[connection_id]["candidate"] = candidate_params
-        pcs[connection_id]["pc"].addIceCandidate(candidate_params)
+        if "pc" in pcs[connection_id]:
+            pcs[connection_id]["pc"].addIceCandidate(candidate_params)
     else:
         pcs[connection_id] = {
             "candidate": candidate_params
